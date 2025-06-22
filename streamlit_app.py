@@ -1,12 +1,57 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from nytcomments.nytcomments import get_comments
 from textblob import TextBlob
+import requests
+from bs4 import BeautifulSoup
+import json
+import re
 
 # Configure page
 st.set_page_config(page_title="NYT Comments Analysis", layout="wide")
 st.title("New York Times Comments Sentiment Analysis")
+
+def scrape_nyt_comments(article_url):
+    """Scrape NYT comments directly from article page"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(article_url, headers=headers)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find the script tag containing comment data
+        script_tag = soup.find('script', id='js-article-comments')
+        if not script_tag:
+            st.warning("No comments found in article HTML")
+            return pd.DataFrame()
+        
+        # Extract JSON data using regex
+        json_data = re.search(r'window\.__preloadedData\s*=\s*({.*?});', script_tag.string, re.DOTALL)
+        if not json_data:
+            return pd.DataFrame()
+        
+        data = json.loads(json_data.group(1))
+        comments = data.get('comments', [])
+        
+        # Create DataFrame with required columns
+        comments_df = pd.DataFrame(comments)
+        
+        # Rename columns to match original structure
+        column_map = {
+            'commentBody': 'commentBody',
+            'createDate': 'createDate',
+            'recommendations': 'recommendations',
+            'editorsSelection': 'editorsSelection',
+            'userDisplayName': 'userDisplayName'
+        }
+        comments_df = comments_df.rename(columns=column_map)[list(column_map.values())]
+        
+        return comments_df
+    
+    except Exception as e:
+        st.error(f"Error scraping comments: {str(e)}")
+        return pd.DataFrame()
 
 # Input section
 article_url = st.text_input("Enter NYT Article URL:", 
@@ -15,7 +60,7 @@ article_url = st.text_input("Enter NYT Article URL:",
 if article_url:
     # Fetch comments
     with st.spinner('Fetching comments from NYT...'):
-        comments_df = get_comments([article_url])
+        comments_df = scrape_nyt_comments(article_url)
         
     if not comments_df.empty:
         # Sentiment analysis
@@ -29,7 +74,10 @@ if article_url:
         
         # Create size column (scale recommendations)
         max_rec = comments_df['recommendations'].max()
-        comments_df['size'] = 10 + 40 * (comments_df['recommendations'] / max_rec)
+        if max_rec > 0:
+            comments_df['size'] = 10 + 40 * (comments_df['recommendations'] / max_rec)
+        else:
+            comments_df['size'] = 10
         
         # Create marker symbols
         comments_df['symbol'] = comments_df['editorsSelection'].map({
