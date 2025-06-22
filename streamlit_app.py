@@ -18,21 +18,11 @@ def extract_uuid(article_url):
         response = requests.get(article_url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Method 1: JSON-LD metadata
-        for script in soup.find_all('script', type='application/ld+json'):
-            try:
-                data = json.loads(script.string)
-                if data.get('@type') == 'NewsArticle':
-                    url = data.get('mainEntityOfPage', {}).get('@id', '')
-                    if match := re.search(r'article/([a-f0-9-]{36})', url):
-                        return match.group(1)
-            except:
-                continue
-        
-        # Method 2: Open Graph URL
-        meta_og = soup.find('meta', property='og:url')
-        if meta_og and (match := re.search(r'article/([a-f0-9-]{36})', meta_og['content'])):
-            return match.group(1)
+        # Method: Extract from <link rel="alternate"> tag
+        link_tag = soup.find('link', {'rel': 'alternate', 'href': re.compile(r'nyt://article')})
+        if link_tag:
+            if match := re.search(r'article/([a-f0-9-]{36})', link_tag['href']):
+                return match.group(1)
         
         st.warning("UUID not found in page metadata")
         return None
