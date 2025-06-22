@@ -6,48 +6,43 @@ import requests
 import json
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
 
 # Configure page
 st.set_page_config(page_title="NYT Comments Analysis", layout="wide")
 st.title("New York Times Comments Sentiment Analysis")
 
-def extract_article_id(article_url):
-    """Extract article ID from URL using multiple methods"""
-    # Method 1: Extract UUID from URL path
-    uuid_match = re.search(r'article/([a-f0-9-]{36})', article_url)
-    if uuid_match:
-        return uuid_match.group(1)
-    
-    # Method 2: Extract from page metadata
+def extract_uuid(article_url):
+    """Extract UUID from NYT article page metadata"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(article_url, headers=headers)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Check meta tags
-        for meta in soup.find_all('meta'):
-            if meta.get('property') == 'og:url' and 'article' in meta.get('content', ''):
-                return re.search(r'article/([a-f0-9-]+)', meta.get('content')).group(1)
-        
-        # Check JSON-LD data
+        # Method 1: JSON-LD metadata
         for script in soup.find_all('script', type='application/ld+json'):
             try:
                 data = json.loads(script.string)
-                if '@type' in data and data['@type'] == 'NewsArticle':
-                    return data.get('mainEntityOfPage', {}).get('identifier')
+                if data.get('@type') == 'NewsArticle':
+                    url = data.get('mainEntityOfPage', {}).get('@id', '')
+                    if match := re.search(r'article/([a-f0-9-]{36})', url):
+                        return match.group(1)
             except:
                 continue
-                
+        
+        # Method 2: Open Graph URL
+        meta_og = soup.find('meta', property='og:url')
+        if meta_og and (match := re.search(r'article/([a-f0-9-]{36})', meta_og['content'])):
+            return match.group(1)
+        
+        st.warning("UUID not found in page metadata")
+        return None
+        
     except Exception as e:
         st.error(f"Metadata extraction error: {str(e)}")
-    
-    # Method 3: Use URL path as fallback ID
-    parsed = urlparse(article_url)
-    return parsed.path.strip('/')
+        return None
 
-def get_comments_via_graphql(article_id):
-    """Fetch comments using NYT's GraphQL API"""
+def get_comments_via_graphql(uuid):
+    """Fetch comments using UUID with GraphQL API"""
     try:
         # GraphQL query parameters
         operation = "communityCommentsQuery"
@@ -57,7 +52,7 @@ def get_comments_via_graphql(article_id):
         graphql_url = (
             f"https://samizdat-graphql.nytimes.com/graphql/v2?"
             f"operationName={operation}&"
-            f"variables=%7B%22uri%22%3A%22nyt%3A%2F%2Farticle%2F{article_id}%22%2C%22input%22%3A%7B%22after%22%3Anull%2C%22asc%22%3Afalse%2C%22first%22%3A100%2C%22replies%22%3A3%2C%22view%22%3A%22ALL%22%7D%2C%22hasThreading%22%3Afalse%7D&"
+            f"variables=%7B%22uri%22%3A%22nyt%3A%2F%2Farticle%2F{uuid}%22%2C%22input%22%3A%7B%22after%22%3Anull%2C%22asc%22%3Afalse%2C%22first%22%3A100%2C%22replies%22%3A3%2C%22view%22%3A%22ALL%22%7D%2C%22hasThreading%22%3Afalse%7D&"
             f"extensions=%7B%22persistedQuery%22%3A%7B%22version%22%3A1%2C%22sha256Hash%22%3A%22{sha256_hash}%22%7D%7D"
         )
         
@@ -119,17 +114,15 @@ article_url = st.text_input("Enter NYT Article URL:",
                            placeholder="https://www.nytimes.com/...")
 
 if article_url:
-    # Extract article ID
-    article_id = extract_article_id(article_url)
-    st.info(f"Using article ID: {article_id}")
+    # Extract UUID from page metadata
+    uuid = extract_uuid(article_url)
     
-    # Try GraphQL first
-    with st.spinner('Fetching comments via GraphQL API...'):
-        comments_df = get_comments_via_graphql(article_id)
-    
-    # Fallback to HTML scraping if no comments
-    if comments_df.empty:
-        st.warning("GraphQL method failed. Falling back to HTML scraping.")
+    if uuid:
+        st.success(f"Found UUID: {uuid}")
+        with st.spinner('Fetching comments via GraphQL API...'):
+            comments_df = get_comments_via_graphql(uuid)
+    else:
+        st.warning("Using HTML scraping method")
         with st.spinner('Fetching comments via HTML scraping...'):
             comments_df = scrape_nyt_comments(article_url)
     
